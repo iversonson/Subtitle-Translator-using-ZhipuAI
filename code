@@ -1,0 +1,146 @@
+import re
+import os
+from zhipuai import ZhipuAI
+
+client = ZhipuAI(api_key="*****")  # 请填写您自己的API key
+
+def read_srt(filepath):
+    """
+    读取 SRT 字幕文件的内容。
+
+    Args:
+        filepath: SRT 文件的路径。
+
+    Returns:
+        一个包含所有字幕条目的列表，每个条目是一个字典，包含序号、时间码和文本。
+        如果文件不存在或格式错误，则返回 None。
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"错误：文件 '{filepath}' 未找到。")
+        return None
+    except UnicodeDecodeError:
+        print(f"错误: 文件 '{filepath}' 编码错误, 请转换为UTF-8编码")
+        return None
+
+    # 使用正则表达式匹配字幕条目
+    pattern = r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)\n\n'
+    entries = []
+
+    for match in re.finditer(pattern, content, re.DOTALL):
+        index, start_time, end_time, text = match.groups()
+        entries.append({
+            'index': int(index),
+            'start_time': start_time,
+            'end_time': end_time,
+            'text': text.strip()
+        })
+
+    if not entries:
+        print(f"错误：文件 '{filepath}' 不是有效的 SRT 文件或内容为空。")
+        return None
+
+    return entries
+
+def translate_text(text, source_language="en", target_language="zh"):
+    """
+    使用智谱AI API 翻译文本。
+
+    Args:
+        text: 要翻译的文本。
+        source_language: 源语言代码，默认为英文 ("en")。
+        target_language: 目标语言代码，默认为中文 ("zh")。
+
+    Returns:
+        翻译后的文本，如果出现错误则返回 None。
+    """
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": f"你是一个专业翻译助手, 擅长将{source_language}翻译成{target_language}, 要求翻译准确且自然流畅"
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ]
+
+        response = client.chat.completions.create(
+            model="glm-4-flash",
+            messages=messages,
+            top_p=0.7,
+            temperature=0.95,
+            max_tokens=2048,
+            stream=False
+        )
+
+        translated_text = response.choices[0].message.content
+        return translated_text
+    except Exception as e:
+        print(f"错误：翻译时发生错误：{e}")
+        return None
+
+def generate_translated_srt(srt_entries, source_language="en", target_language="zh"):
+    """
+    翻译 SRT 字幕条目列表，并生成新的 SRT 字幕条目列表。
+
+    Args:
+        srt_entries: 原始 SRT 字幕条目列表。
+        source_language: 源语言代码。
+        target_language: 目标语言代码。
+
+    Returns:
+        新的包含翻译后文本的 SRT 字幕条目列表。
+    """
+    translated_entries = []
+    for entry in srt_entries:
+        translated_text = translate_text(entry['text'], source_language, target_language)
+        if translated_text:
+            translated_entries.append({
+                'index': entry['index'],
+                'start_time': entry['start_time'],
+                'end_time': entry['end_time'],
+                'text': entry['text'],
+                'translated_text': translated_text
+            })
+        else:
+            print(f"序号为 {entry['index']} 的字幕翻译失败，将跳过。")
+
+    return translated_entries
+
+def write_srt(filepath, srt_entries):
+    """
+    将 SRT 字幕条目列表写入到 SRT 文件。
+
+    Args:
+        filepath: 要写入的 SRT 文件路径。
+        srt_entries: SRT 字幕条目列表。
+    """
+    with open(filepath, 'w', encoding='utf-8') as f:
+        for entry in srt_entries:
+            f.write(f"{entry['index']}\n")
+            f.write(f"{entry['start_time']} --> {entry['end_time']}\n")
+            f.write(f"{entry['text']}\n")
+            f.write(f"{entry['translated_text']}\n\n")  # 添加翻译后的文本
+
+def main():
+    filename = input("请输入当前文件夹下的 SRT 文件名：")
+    filepath = os.path.join(os.getcwd(), filename)
+
+    srt_entries = read_srt(filepath)
+
+    if srt_entries:
+        translated_entries = generate_translated_srt(srt_entries)
+
+        if translated_entries:
+            base, ext = os.path.splitext(filename)
+            output_filename = f"{base}翻译{ext}"
+            output_filepath = os.path.join(os.getcwd(), output_filename)
+            write_srt(output_filepath, translated_entries)
+            print(f"翻译完成，已保存到文件：'{output_filename}'")
+
+if __name__ == "__main__":
+    main()
